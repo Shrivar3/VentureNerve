@@ -16,6 +16,19 @@ def plot_startup_mrr_fanchart(res: dict):
     mrr_p10, mrr_p50, mrr_p90 = res["percentiles"]["mrr"]
     target = float(res["config"]["target_mrr"])
 
+    # Optional subtitle metrics (if startup_mc metrics exist)
+    subtitle = ""
+    m = res.get("metrics", {})
+    if isinstance(m, dict) and ("pd_12m_distress" in m or "cash_runway_median_months" in m):
+        parts = []
+        if "pd_12m_distress" in m:
+            parts.append(f"12m Distress PD: {100*float(m['pd_12m_distress']):.1f}%")
+        if "cash_runway_median_months" in m:
+            parts.append(f"Median runway: {float(m['cash_runway_median_months']):.1f} mo")
+        if "expected_arr_growth" in m:
+            parts.append(f"Expected ARR growth: {100*float(m['expected_arr_growth']):.0f}%")
+        subtitle = " | ".join(parts)
+
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=t, y=mrr_p50, mode="lines", name="Median"))
     fig.add_trace(go.Scatter(x=t, y=mrr_p90, mode="lines", line=dict(width=0), showlegend=False))
@@ -30,7 +43,7 @@ def plot_startup_mrr_fanchart(res: dict):
     )
     fig.add_hline(y=target, annotation_text="Target MRR", annotation_position="top left")
     fig.update_layout(
-        title="MRR fan chart",
+        title="MRR fan chart" + (f"<br><sup>{subtitle}</sup>" if subtitle else ""),
         xaxis_title="Month",
         yaxis_title="MRR",
     )
@@ -44,6 +57,11 @@ def plot_uncertain_results_nice(res: dict, *, roi_zoom_max: float = 10.0):
       2) ROI histogram zoomed
       3) Expected-value contribution bars
       4) Survival curve
+
+    If available, includes headline metrics in titles:
+      - RAR (E[IRR]*(1-PD_12m))
+      - E[IRR]
+      - PD_12m
     """
     import plotly.graph_objects as go
 
@@ -51,6 +69,19 @@ def plot_uncertain_results_nice(res: dict, *, roi_zoom_max: float = 10.0):
     alive = np.asarray(res["paths"]["alive_frac_by_month"], dtype=float)
     months = len(alive) - 1
     t = np.arange(months + 1)
+
+    m = res.get("metrics", {})
+    title_suffix = ""
+    if isinstance(m, dict):
+        if ("rar" in m) or ("expected_irr" in m) or ("pd_12m" in m):
+            parts = []
+            if "rar" in m:
+                parts.append(f"RAR: {100*float(m['rar']):.1f}%")
+            if "expected_irr" in m:
+                parts.append(f"E[IRR]: {100*float(m['expected_irr']):.1f}%")
+            if "pd_12m" in m:
+                parts.append(f"PD_12m: {100*float(m['pd_12m']):.1f}%")
+            title_suffix = " — " + " | ".join(parts)
 
     probs = {
         "Lose money (<1x)": float(np.mean(roi < 1.0)),
@@ -68,7 +99,7 @@ def plot_uncertain_results_nice(res: dict, *, roi_zoom_max: float = 10.0):
         )
     )
     fig_probs.update_layout(
-        title="Outcome probabilities (single startup)",
+        title="Outcome probabilities (single startup)" + title_suffix,
         yaxis_title="Probability",
         yaxis=dict(range=[0, 1]),
     )
@@ -77,7 +108,7 @@ def plot_uncertain_results_nice(res: dict, *, roi_zoom_max: float = 10.0):
     fig_roi = go.Figure()
     fig_roi.add_trace(go.Histogram(x=roi_zoom, nbinsx=90))
     fig_roi.update_layout(
-        title=f"ROI distribution (zoomed: 0× to {roi_zoom_max:.0f}×)",
+        title=f"ROI distribution (zoomed: 0× to {roi_zoom_max:.0f}×)" + title_suffix,
         xaxis_title="ROI multiple (payout / investment)",
         yaxis_title="Count",
     )
@@ -104,7 +135,7 @@ def plot_uncertain_results_nice(res: dict, *, roi_zoom_max: float = 10.0):
         )
     )
     fig_contrib.update_layout(
-        title="Where the expected return comes from",
+        title="Where the expected return comes from" + title_suffix,
         yaxis_title="Fraction of expected ROI",
         yaxis=dict(range=[0, 1]),
     )
@@ -112,7 +143,7 @@ def plot_uncertain_results_nice(res: dict, *, roi_zoom_max: float = 10.0):
     fig_surv = go.Figure()
     fig_surv.add_trace(go.Scatter(x=t, y=alive, mode="lines", name="P(alive)"))
     fig_surv.update_layout(
-        title="Survival curve: probability startup has NOT failed by month t",
+        title="Survival curve: probability startup has NOT failed by month t" + title_suffix,
         xaxis_title="Month",
         yaxis_title="P(alive)",
         yaxis=dict(range=[0, 1]),
@@ -132,6 +163,18 @@ def plot_roi_probability_bars(port: dict):
         "Excellent (≥10x)": float(np.mean(roi >= 10)),
     }
 
+    m = port.get("portfolio_metrics", {})
+    title_suffix = ""
+    if isinstance(m, dict) and ("rar" in m or "pd_12m" in m or "expected_irr" in m):
+        parts = []
+        if "rar" in m:
+            parts.append(f"RAR: {100*float(m['rar']):.1f}%")
+        if "expected_irr" in m:
+            parts.append(f"E[IRR]: {100*float(m['expected_irr']):.1f}%")
+        if "pd_12m" in m:
+            parts.append(f"PD_12m: {100*float(m['pd_12m']):.1f}%")
+        title_suffix = " — " + " | ".join(parts)
+
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
@@ -142,7 +185,7 @@ def plot_roi_probability_bars(port: dict):
         )
     )
     fig.update_layout(
-        title="Outcome probabilities (portfolio)",
+        title="Outcome probabilities (portfolio)" + title_suffix,
         yaxis_title="Probability",
         yaxis=dict(range=[0, 1]),
     )
@@ -196,5 +239,27 @@ def plot_value_contribution(port: dict):
         title="Where the expected return comes from",
         yaxis_title="Fraction of expected ROI",
         yaxis=dict(range=[0, 1]),
+    )
+    return fig
+
+
+def plot_irr_zoom(port: dict, *, xmin: float = -1.0, xmax: float = 2.0, nbins: int = 80):
+    """
+    Optional: IRR histogram (portfolio), useful now that RAR is the headline metric.
+    """
+    import plotly.graph_objects as go
+
+    irr = np.asarray(port["portfolio_samples"].get("irr", []), dtype=float)
+    if irr.size == 0:
+        raise ValueError("No IRR samples found in port['portfolio_samples']['irr'].")
+
+    irr_zoom = irr[(irr >= float(xmin)) & (irr <= float(xmax))]
+
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=irr_zoom, nbinsx=int(nbins)))
+    fig.update_layout(
+        title=f"IRR distribution (zoomed: {xmin:.2f} to {xmax:.2f})",
+        xaxis_title="IRR",
+        yaxis_title="Count",
     )
     return fig
