@@ -44,8 +44,6 @@ def run_startup_mc(
       - 12m distress PD: P(runs out of cash by month 12)
       - cash runway (median months to cash<0; capped at horizon)
       - ARR growth (12m): (MRR_12 / MRR_0 - 1)
-      - revenue concentration + fragility are *not* inferable from this toy model,
-        so they are intentionally not fabricated here.
     """
     rng = np.random.default_rng(seed)
 
