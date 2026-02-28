@@ -39,6 +39,13 @@ def run_startup_mc(
     Simple startup runway + MRR evolution Monte Carlo.
 
     Success = (never runs out of cash) AND (hits target MRR at any time).
+
+    Adds dashboard-aligned metrics:
+      - 12m distress PD: P(runs out of cash by month 12)
+      - cash runway (median months to cash<0; capped at horizon)
+      - ARR growth (12m): (MRR_12 / MRR_0 - 1)
+      - revenue concentration + fragility are *not* inferable from this toy model,
+        so they are intentionally not fabricated here.
     """
     rng = np.random.default_rng(seed)
 
@@ -57,6 +64,9 @@ def run_startup_mc(
 
     alive = np.ones(n_sims, dtype=bool)  # hasn’t hit cash<0 yet
 
+    # first month of distress (cash < 0). np.inf means never distressed in horizon
+    first_distress_month = np.full(n_sims, np.inf, dtype=float)
+
     for t in range(months):
         mrr_t = mrr_paths[:, t]
         cash_t = cash_paths[:, t]
@@ -73,12 +83,30 @@ def run_startup_mc(
         mrr_paths[:, t + 1] = mrr_next
         cash_paths[:, t + 1] = cash_next
 
+        # distress update
+        newly_dead = alive & (cash_next < 0.0)
+        first_distress_month[newly_dead] = float(t + 1)
         alive &= (cash_next >= 0.0)
 
     # Success: alive throughout AND reach target by end (or at any point)
     hit_target = (mrr_paths.max(axis=1) >= target_mrr)
     success = alive & hit_target
     p_success = float(success.mean())
+
+    # 12m distress PD (within horizon)
+    pd_12m = float(np.mean(np.isfinite(first_distress_month)))
+
+    # Runway (months) as median months-to-distress; if never distressed, set to horizon months
+    runway_months = np.where(np.isfinite(first_distress_month), first_distress_month, float(months))
+    cash_runway_median_months = float(np.median(runway_months))
+    cash_runway_p10_months = float(np.percentile(runway_months, 10))
+    cash_runway_p90_months = float(np.percentile(runway_months, 90))
+
+    # ARR growth proxy from MRR growth over horizon (use last month)
+    mrr_end = mrr_paths[:, -1]
+    arr_growth = np.where(mrr0 > 0, (mrr_end / float(mrr0)) - 1.0, np.nan)
+    expected_arr_growth = float(np.mean(arr_growth))
+    median_arr_growth = float(np.median(arr_growth))
 
     # Percentiles for fan chart
     def pct(arr: np.ndarray, qs=(10, 50, 90)):
@@ -108,10 +136,22 @@ def run_startup_mc(
         "p_success": p_success,
         "success": success,
         "params": {"g": g, "c": c, "margin": margin, "burn_mult": burn_mult},
-        "paths": {"mrr": mrr_paths, "cash": cash_paths},
+        "paths": {
+            "mrr": mrr_paths,
+            "cash": cash_paths,
+            "first_distress_month": first_distress_month,
+        },
         "percentiles": {
             "mrr": (mrr_p10, mrr_p50, mrr_p90),
             "cash": (cash_p10, cash_p50, cash_p90),
+        },
+        "metrics": {
+            "pd_12m_distress": pd_12m,
+            "cash_runway_median_months": cash_runway_median_months,
+            "cash_runway_p10_months": cash_runway_p10_months,
+            "cash_runway_p90_months": cash_runway_p90_months,
+            "expected_arr_growth": expected_arr_growth,
+            "median_arr_growth": median_arr_growth,
         },
         "sensitivity": sens_sorted,
         "config": dict(months=months, target_mrr=target_mrr),
