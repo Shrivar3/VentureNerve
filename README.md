@@ -182,7 +182,6 @@ Potential extensions:
 - Correlated startup returns
 - Sector factor modelling
 - Bayesian prior calibration from real data
-- Frontend dashboard
 - Live API integration
 
 ---
