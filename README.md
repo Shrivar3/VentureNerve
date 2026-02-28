@@ -4,7 +4,7 @@ A Monte Carlo–based venture capital portfolio optimisation engine.
 
 This project simulates startup outcomes under parameter uncertainty, evaluates expected returns and risk, and builds an optimised portfolio based on a chosen investor objective.
 
-It is designed for hackathons, investor tooling prototypes, and decision-support systems where transparency, flexibility, and scenario analysis are critical.
+It is designed for investor tooling prototypes and decision-support systems where transparency, flexibility, and scenario analysis are critical.
 
 ---
 
