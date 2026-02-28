@@ -1,7 +1,60 @@
 from __future__ import annotations
-
 import numpy as np
+from typing import Dict, Any
 
+def pd_12m_from_alive_curve(alive_frac_by_month: np.ndarray) -> float:
+    """
+    12M distress/default PD from survival curve.
+    alive_frac_by_month[t] = P(alive at month t)
+    PD_12m = 1 - P(alive at month 12)
+    """
+    a = np.asarray(alive_frac_by_month, dtype=float)
+    if a.size == 0:
+        return float("nan")
+    idx = min(12, a.size - 1)
+    return float(1.0 - a[idx])
+
+
+def expected_irr_from_res(res: Dict[str, Any]) -> float:
+    """
+    Uses simulator-produced irr samples if present; otherwise derives IRR from ROI.
+    """
+    if "samples" in res and "irr" in res["samples"]:
+        irr = np.asarray(res["samples"]["irr"], dtype=float)
+        return float(np.mean(irr))
+
+    roi = np.asarray(res["samples"]["roi"], dtype=float)
+    years = float(res["config"]["horizon_years"])
+    irr = np.where(roi <= 0, -1.0, np.power(roi, 1.0 / max(years, 1e-12)) - 1.0)
+    return float(np.mean(irr))
+
+
+def rar_from_res(res: Dict[str, Any]) -> float:
+    """
+    RAR = E[IRR] * (1 - PD_12m)
+    """
+    exp_irr = expected_irr_from_res(res)
+    alive = np.asarray(res["paths"]["alive_frac_by_month"], dtype=float)
+    pd12 = pd_12m_from_alive_curve(alive)
+    return float(exp_irr * (1.0 - pd12))
+
+
+def attach_rar_metrics(res: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Convenience: compute all dashboard-style headline metrics.
+    Returns dict with:
+      - expected_irr
+      - pd_12m
+      - rar
+    """
+    exp_irr = expected_irr_from_res(res)
+    alive = np.asarray(res["paths"]["alive_frac_by_month"], dtype=float)
+    pd12 = pd_12m_from_alive_curve(alive)
+    return {
+        "expected_irr": float(exp_irr),
+        "pd_12m": float(pd12),
+        "rar": float(exp_irr * (1.0 - pd12)),
+    }
 
 def _safe_percentile(x: np.ndarray, q: float) -> float:
     x = np.asarray(x, dtype=float)
