@@ -19,7 +19,7 @@ def simulate_company_metrics(
     keep_full_res: bool = False,
 ) -> dict:
     """
-    Simulates a single company and returns a UI-ready row.
+    Simulates a single company
 
     Base ranking metric:
       RAR = E[IRR] * (1 - PD_12m)
