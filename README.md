@@ -63,16 +63,6 @@ Portfolio constraints:
 
 ---
 
-## Installation (if using as a package)
-
-```bash
-pip install -e .
-```
-
-Or run directly in Jupyter using the self-contained script version.
-
----
-
 ## Example Usage
 
 ```python
@@ -151,7 +141,6 @@ The portfolio builder returns:
 - VC fund modelling
 - Angel investment decision support
 - Startup scenario analysis
-- Hackathon demo applications
 - Portfolio theory experimentation
 - Risk-adjusted return optimisation
 
