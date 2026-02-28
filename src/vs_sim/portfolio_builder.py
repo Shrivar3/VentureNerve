@@ -7,28 +7,33 @@ import numpy as np
 
 from .portfolio import investor_score, simulate_portfolio_roi
 from .vc_simulator import run_vc_return_simulator_uncertain
+from .investor_metrics import attach_rar_metrics
 
 
 # ============================================================
-# PORTFOLIO BUILDER
-# - Evaluates startups (Monte Carlo)
-# - Selects a subset (top-k by score)
-# - Optimises weights to maximise an "optimal metric" (objective)
+# PORTFOLIO BUILDER (RAR-FIRST)
 #
-# Supported objectives (same as investor_score):
-#   - "expected_roi"
+# Base metric:
+#   RAR = E[IRR] * (1 - PD_12m)
+# where:
+#   - E[IRR] is the mean IRR (per-startup) from simulator samples
+#   - PD_12m = 1 - P(alive at month 12) from the survival curve
+#
+# Behaviour:
+#   - Selection: top-k by the chosen objective (default objective="rar")
+#   - Weight optimisation: maximises the chosen objective (default uses RAR)
+#
+# Supported objectives:
+#   - "rar"          : portfolio RAR (default)
+#   - "expected_roi" : ROI-based investor_score objective
 #   - "expected_log"
 #   - "prob_target"
 #   - "prob_10x"
 #
 # Weight optimisation methods:
-#   - "equal"        : equal weights
-#   - "grid"         : grid search (only feasible for k<=3)
-#   - "dirichlet"    : random search over weights via Dirichlet samples (recommended)
-#
-# Tickets:
-#   - weights -> tickets = weights * budget
-#   - enforce min_ticket by bumping then renormalising to budget
+#   - "equal"
+#   - "grid"       (k<=3)
+#   - "dirichlet"  (recommended)
 # ============================================================
 
 
@@ -36,7 +41,6 @@ from .vc_simulator import run_vc_return_simulator_uncertain
 class StartupSpec:
     name: str
     priors: Dict[str, Any]
-    # Optional per-startup overrides (rarely needed)
     pre_money: Optional[float] = None
 
 
@@ -50,176 +54,16 @@ def _normalise_weights(w: np.ndarray) -> np.ndarray:
 def _tickets_from_weights(weights: np.ndarray, budget: float, min_ticket: float) -> np.ndarray:
     w = _normalise_weights(weights)
     tickets = w * float(budget)
-    # Enforce min ticket: bump small tickets, then rescale to budget
     tickets = np.maximum(tickets, float(min_ticket))
     tickets = tickets * (float(budget) / (float(tickets.sum()) + 1e-12))
-    # Convert back to weights implied by tickets (to keep consistency)
     w2 = tickets / (float(budget) + 1e-12)
-    return _normalise_weights(w2)  # final weights consistent with min_ticket
+    return _normalise_weights(w2)
 
 
-def _choose_k_by_metric(
-    evaluated: List[Dict[str, Any]],
-    *,
-    k: int,
-    objective: str,
-    target_roi: float,
-    risk_penalty: float,
-    loss_penalty: float,
-) -> List[Dict[str, Any]]:
-    scored = []
-    for item in evaluated:
-        roi = np.asarray(item["res"]["samples"]["roi"], dtype=float)
-        sc = investor_score(
-            roi,
-            objective=objective,
-            target_roi=target_roi,
-            risk_penalty=risk_penalty,
-            loss_penalty=loss_penalty,
-        )
-        scored.append({**item, "score": float(sc)})
-
-    scored.sort(key=lambda d: d["score"], reverse=True)
-    k_eff = max(1, min(int(k), len(scored)))
-    return scored[:k_eff]
-
-
-def _optimise_weights_equal(k: int) -> np.ndarray:
-    return np.ones(int(k), dtype=float) / float(k)
-
-
-def _optimise_weights_grid(
-    roi_mat: np.ndarray,
-    *,
-    objective: str,
-    target_roi: float,
-    risk_penalty: float,
-    loss_penalty: float,
-    step: float = 0.1,
-) -> Tuple[np.ndarray, float]:
-    """
-    Exact-ish grid optimisation for k<=3.
-    Returns (best_weights, best_score).
-    """
-    k = roi_mat.shape[1]
-    if k > 3:
-        raise ValueError("grid optimisation supports k<=3 only. Use method='dirichlet'.")
-
-    grid = np.arange(0, 1 + 1e-9, float(step))
-    best_sc = -np.inf
-    best_w = None
-
-    if k == 1:
-        w = np.array([1.0])
-        port_roi = simulate_portfolio_roi(roi_mat, w)
-        best_sc = investor_score(
-            port_roi,
-            objective=objective,
-            target_roi=target_roi,
-            risk_penalty=risk_penalty,
-            loss_penalty=loss_penalty,
-        )
-        best_w = w
-
-    elif k == 2:
-        for w0 in grid:
-            w = np.array([w0, 1.0 - w0], dtype=float)
-            port_roi = simulate_portfolio_roi(roi_mat, w)
-            sc = investor_score(
-                port_roi,
-                objective=objective,
-                target_roi=target_roi,
-                risk_penalty=risk_penalty,
-                loss_penalty=loss_penalty,
-            )
-            if sc > best_sc:
-                best_sc = float(sc)
-                best_w = w
-
-    elif k == 3:
-        for w0 in grid:
-            for w1 in grid:
-                w2 = 1.0 - w0 - w1
-                if w2 < -1e-9:
-                    continue
-                w = np.array([w0, w1, max(0.0, w2)], dtype=float)
-                w = _normalise_weights(w)
-                port_roi = simulate_portfolio_roi(roi_mat, w)
-                sc = investor_score(
-                    port_roi,
-                    objective=objective,
-                    target_roi=target_roi,
-                    risk_penalty=risk_penalty,
-                    loss_penalty=loss_penalty,
-                )
-                if sc > best_sc:
-                    best_sc = float(sc)
-                    best_w = w
-
-    if best_w is None:
-        best_w = _optimise_weights_equal(k)
-        best_sc = float(
-            investor_score(
-                simulate_portfolio_roi(roi_mat, best_w),
-                objective=objective,
-                target_roi=target_roi,
-                risk_penalty=risk_penalty,
-                loss_penalty=loss_penalty,
-            )
-        )
-    return best_w, float(best_sc)
-
-
-def _optimise_weights_dirichlet(
-    roi_mat: np.ndarray,
-    *,
-    objective: str,
-    target_roi: float,
-    risk_penalty: float,
-    loss_penalty: float,
-    n_draws: int = 10_000,
-    alpha: float = 1.0,
-    seed: int = 0,
-) -> Tuple[np.ndarray, float]:
-    """
-    Random search over weights with Dirichlet(alpha,...,alpha).
-    Returns (best_weights, best_score).
-    """
-    rng = np.random.default_rng(seed)
-    k = roi_mat.shape[1]
-
-    best_sc = -np.inf
-    best_w = None
-
-    # Include equal weights as a baseline candidate
-    w0 = _optimise_weights_equal(k)
-    sc0 = investor_score(
-        simulate_portfolio_roi(roi_mat, w0),
-        objective=objective,
-        target_roi=target_roi,
-        risk_penalty=risk_penalty,
-        loss_penalty=loss_penalty,
-    )
-    best_sc = float(sc0)
-    best_w = w0
-
-    # Sample weights
-    A = np.full(k, float(alpha), dtype=float)
-    for _ in range(int(n_draws)):
-        w = rng.dirichlet(A)
-        port_roi = simulate_portfolio_roi(roi_mat, w)
-        sc = investor_score(
-            port_roi,
-            objective=objective,
-            target_roi=target_roi,
-            risk_penalty=risk_penalty,
-            loss_penalty=loss_penalty,
-        )
-        if sc > best_sc:
-            best_sc = float(sc)
-            best_w = w
-
-    return best_w, float(best_sc)
+def _roi_to_irr(roi: np.ndarray, years: float) -> np.ndarray:
+    roi = np.asarray(roi, dtype=float)
+    years = float(years)
+    return np.where(roi <= 0.0, -1.0, np.power(roi, 1.0 / max(years, 1e-12)) - 1.0)
 
 
 def _portfolio_metrics(roi: np.ndarray) -> Dict[str, Any]:
@@ -254,13 +98,209 @@ def _evaluate_startups(
             n_sims=int(n_sims),
             horizon_years=float(horizon_years),
             investment=float(investment),
-            pre_money=pre_money,
+            pre_money=float(pre_money),
             priors=dict(s.priors),
             macro_shock_sd_annual=float(macro_shock_sd_annual),
             store_valuation_path=bool(store_valuation_path),
         )
         evaluated.append({"name": s.name, "priors": dict(s.priors), "res": res})
     return evaluated
+
+
+def _single_score(item: Dict[str, Any], *, objective: str, target_roi: float, risk_penalty: float, loss_penalty: float) -> float:
+    """
+    Score a single startup under an objective.
+    - For objective="rar": use attach_rar_metrics(res)["rar"].
+    - Otherwise: use investor_score on ROI samples.
+    """
+    if objective == "rar":
+        return float(attach_rar_metrics(item["res"])["rar"])
+
+    roi = np.asarray(item["res"]["samples"]["roi"], dtype=float)
+    return float(
+        investor_score(
+            roi,
+            objective=objective,
+            target_roi=target_roi,
+            risk_penalty=risk_penalty,
+            loss_penalty=loss_penalty,
+        )
+    )
+
+
+def _choose_k_by_metric(
+    evaluated: List[Dict[str, Any]],
+    *,
+    k: int,
+    objective: str,
+    target_roi: float,
+    risk_penalty: float,
+    loss_penalty: float,
+) -> List[Dict[str, Any]]:
+    scored: List[Dict[str, Any]] = []
+    for item in evaluated:
+        sc = _single_score(
+            item,
+            objective=objective,
+            target_roi=target_roi,
+            risk_penalty=risk_penalty,
+            loss_penalty=loss_penalty,
+        )
+        scored.append({**item, "score": float(sc)})
+
+    scored.sort(key=lambda d: d["score"], reverse=True)
+    k_eff = max(1, min(int(k), len(scored)))
+    return scored[:k_eff]
+
+
+def _objective_value_for_portfolio(
+    *,
+    port_roi: np.ndarray,
+    weights: np.ndarray,
+    chosen: Sequence[Dict[str, Any]],
+    objective: str,
+    target_roi: float,
+    risk_penalty: float,
+    loss_penalty: float,
+) -> float:
+    """
+    Portfolio objective value under:
+      - "rar": RAR_port = E[IRR_port] * (1 - PD_port_12m)
+               where PD_port_12m is weight-averaged PD_12m across constituents.
+      - otherwise: investor_score(port_roi, ...)
+    """
+    if objective != "rar":
+        return float(
+            investor_score(
+                port_roi,
+                objective=objective,
+                target_roi=target_roi,
+                risk_penalty=risk_penalty,
+                loss_penalty=loss_penalty,
+            )
+        )
+
+    # PD_port_12m: weighted average of constituent PD_12m
+    pds = np.array([attach_rar_metrics(c["res"])["pd_12m"] for c in chosen], dtype=float)
+    w = _normalise_weights(weights)
+    pd_port = float(np.dot(w, pds))
+
+    # E[IRR_port]: derived from portfolio ROI over horizon
+    years = float(chosen[0]["res"]["config"]["horizon_years"])
+    irr_port = _roi_to_irr(np.asarray(port_roi, dtype=float), years)
+    exp_irr_port = float(np.mean(irr_port))
+
+    return float(exp_irr_port * (1.0 - pd_port))
+
+
+def _optimise_weights_equal(k: int) -> np.ndarray:
+    return np.ones(int(k), dtype=float) / float(k)
+
+
+def _optimise_weights_grid(
+    roi_mat: np.ndarray,
+    chosen: Sequence[Dict[str, Any]],
+    *,
+    objective: str,
+    target_roi: float,
+    risk_penalty: float,
+    loss_penalty: float,
+    step: float = 0.1,
+) -> Tuple[np.ndarray, float]:
+    k = roi_mat.shape[1]
+    if k > 3:
+        raise ValueError("grid optimisation supports k<=3 only. Use method='dirichlet'.")
+
+    grid = np.arange(0, 1 + 1e-9, float(step))
+    best_sc = -np.inf
+    best_w: Optional[np.ndarray] = None
+
+    def eval_w(w: np.ndarray) -> float:
+        port_roi = simulate_portfolio_roi(roi_mat, w)
+        return _objective_value_for_portfolio(
+            port_roi=port_roi,
+            weights=w,
+            chosen=chosen,
+            objective=objective,
+            target_roi=target_roi,
+            risk_penalty=risk_penalty,
+            loss_penalty=loss_penalty,
+        )
+
+    if k == 1:
+        w = np.array([1.0], dtype=float)
+        best_w = w
+        best_sc = float(eval_w(w))
+
+    elif k == 2:
+        for w0 in grid:
+            w = np.array([w0, 1.0 - w0], dtype=float)
+            sc = float(eval_w(w))
+            if sc > best_sc:
+                best_sc, best_w = sc, w
+
+    elif k == 3:
+        for w0 in grid:
+            for w1 in grid:
+                w2 = 1.0 - w0 - w1
+                if w2 < -1e-9:
+                    continue
+                w = np.array([w0, w1, max(0.0, w2)], dtype=float)
+                w = _normalise_weights(w)
+                sc = float(eval_w(w))
+                if sc > best_sc:
+                    best_sc, best_w = sc, w
+
+    if best_w is None:
+        best_w = _optimise_weights_equal(k)
+        best_sc = float(eval_w(best_w))
+
+    return np.asarray(best_w, dtype=float), float(best_sc)
+
+
+def _optimise_weights_dirichlet(
+    roi_mat: np.ndarray,
+    chosen: Sequence[Dict[str, Any]],
+    *,
+    objective: str,
+    target_roi: float,
+    risk_penalty: float,
+    loss_penalty: float,
+    n_draws: int = 10_000,
+    alpha: float = 1.0,
+    seed: int = 0,
+) -> Tuple[np.ndarray, float]:
+    rng = np.random.default_rng(seed)
+    k = roi_mat.shape[1]
+
+    best_sc = -np.inf
+    best_w: Optional[np.ndarray] = None
+
+    def eval_w(w: np.ndarray) -> float:
+        port_roi = simulate_portfolio_roi(roi_mat, w)
+        return _objective_value_for_portfolio(
+            port_roi=port_roi,
+            weights=w,
+            chosen=chosen,
+            objective=objective,
+            target_roi=target_roi,
+            risk_penalty=risk_penalty,
+            loss_penalty=loss_penalty,
+        )
+
+    # baseline: equal
+    w0 = _optimise_weights_equal(k)
+    best_w = w0
+    best_sc = float(eval_w(w0))
+
+    A = np.full(k, float(alpha), dtype=float)
+    for _ in range(int(n_draws)):
+        w = rng.dirichlet(A)
+        sc = float(eval_w(w))
+        if sc > best_sc:
+            best_sc, best_w = sc, w
+
+    return np.asarray(best_w, dtype=float), float(best_sc)
 
 
 def build_portfolio(
@@ -278,47 +318,27 @@ def build_portfolio(
     budget: float = 500_000.0,
     k: int = 3,
     min_ticket: float = 100_000.0,
-    # "optimal metric" settings
-    objective: str = "auto",
-    candidate_objectives: Sequence[str] = ("expected_roi", "expected_log", "prob_target", "prob_10x"),
+    # objective
+    objective: str = "rar",  # <-- RAR is the base scoring method
+    candidate_objectives: Sequence[str] = ("rar", "expected_roi", "expected_log", "prob_target", "prob_10x"),
     target_roi: float = 2.0,
     risk_penalty: float = 0.15,
     loss_penalty: float = 0.80,
     # weight optimisation
     weight_method: str = "dirichlet",          # "equal" | "grid" | "dirichlet"
-    weight_grid_step: float = 0.1,             # for grid
-    weight_dirichlet_draws: int = 10_000,      # for dirichlet
-    weight_dirichlet_alpha: float = 1.0,       # <1 encourages sparse weights; >1 encourages equal-ish
+    weight_grid_step: float = 0.1,
+    weight_dirichlet_draws: int = 10_000,
+    weight_dirichlet_alpha: float = 1.0,
 ) -> Dict[str, Any]:
-    """
-    End-to-end build:
-      1) Run MC for each startup
-      2) If objective="auto", pick the objective that yields the best optimised portfolio score
-      3) Pick top-k startups under that objective
-      4) Optimise weights under that objective
-      5) Enforce min_ticket and return a UI-ready result dict
-
-    Returns:
-      {
-        "objective_used": ...,
-        "portfolio_score": ...,
-        "selected": [{name, priors, weight, ticket, single_metrics, single_score}],
-        "portfolio_metrics": ...,
-        "portfolio_samples": {"roi": ...},
-        "debug": {...}
-      }
-    """
     startups = list(startups)
     if len(startups) == 0:
         raise ValueError("startups must be a non-empty list of StartupSpec.")
 
-    # Enforce feasibility: k cannot exceed budget//min_ticket
     max_k_by_budget = int(float(budget) // float(min_ticket))
     if max_k_by_budget <= 0:
         raise ValueError("Budget is smaller than min_ticket; increase budget or reduce min_ticket.")
     k_eff = max(1, min(int(k), max_k_by_budget, len(startups)))
 
-    # 1) Evaluate
     evaluated = _evaluate_startups(
         startups,
         seed0=int(seed),
@@ -330,7 +350,6 @@ def build_portfolio(
         store_valuation_path=bool(store_valuation_path),
     )
 
-    # Helper to build and score a portfolio under a given objective
     def build_under_objective(obj: str) -> Dict[str, Any]:
         chosen = _choose_k_by_metric(
             evaluated,
@@ -341,26 +360,26 @@ def build_portfolio(
             loss_penalty=loss_penalty,
         )
 
-        # Align sims across chosen
         n_s = min(len(c["res"]["samples"]["roi"]) for c in chosen)
         roi_mat = np.column_stack([np.asarray(c["res"]["samples"]["roi"][:n_s], dtype=float) for c in chosen])
 
-        # Optimise weights
+        # optimise weights
         if weight_method == "equal":
-            w = _optimise_weights_equal(len(chosen))
-            best_sc = investor_score(
-                simulate_portfolio_roi(roi_mat, w),
+            w_opt = _optimise_weights_equal(len(chosen))
+            port_sc = _objective_value_for_portfolio(
+                port_roi=simulate_portfolio_roi(roi_mat, w_opt),
+                weights=w_opt,
+                chosen=chosen,
                 objective=obj,
                 target_roi=target_roi,
                 risk_penalty=risk_penalty,
                 loss_penalty=loss_penalty,
             )
-            w_opt = w
-            port_sc = float(best_sc)
 
         elif weight_method == "grid":
             w_opt, port_sc = _optimise_weights_grid(
                 roi_mat,
+                chosen,
                 objective=obj,
                 target_roi=target_roi,
                 risk_penalty=risk_penalty,
@@ -371,6 +390,7 @@ def build_portfolio(
         elif weight_method == "dirichlet":
             w_opt, port_sc = _optimise_weights_dirichlet(
                 roi_mat,
+                chosen,
                 objective=obj,
                 target_roi=target_roi,
                 risk_penalty=risk_penalty,
@@ -382,31 +402,44 @@ def build_portfolio(
         else:
             raise ValueError("weight_method must be one of: 'equal', 'grid', 'dirichlet'.")
 
-        # Enforce min_ticket in weights/tickets
+        # enforce min_ticket
         w_final = _tickets_from_weights(w_opt, float(budget), float(min_ticket))
         port_roi = simulate_portfolio_roi(roi_mat, w_final)
-
         tickets = w_final * float(budget)
+
         pm = _portfolio_metrics(port_roi)
 
-        # Also keep single-startup scores under this objective (useful for UI/debug)
+        # Add RAR headline metrics (always included)
+        years = float(chosen[0]["res"]["config"]["horizon_years"])
+        irr_port = _roi_to_irr(port_roi, years)
+        pm["expected_irr"] = float(np.mean(irr_port))
+
+        pds = np.array([attach_rar_metrics(c["res"])["pd_12m"] for c in chosen], dtype=float)
+        pm["pd_12m"] = float(np.dot(w_final, pds))
+        pm["rar"] = float(pm["expected_irr"] * (1.0 - pm["pd_12m"]))
+
         selected_out = []
         for i, c in enumerate(chosen):
-            roi_i = np.asarray(c["res"]["samples"]["roi"], dtype=float)
-            single_sc = investor_score(
-                roi_i,
-                objective=obj,
-                target_roi=target_roi,
-                risk_penalty=risk_penalty,
-                loss_penalty=loss_penalty,
-            )
+            rar_pack = attach_rar_metrics(c["res"])
             selected_out.append(
                 {
                     "name": c["name"],
                     "priors": c.get("priors", {}),
                     "weight": float(w_final[i]),
                     "ticket": float(tickets[i]),
-                    "single_score": float(single_sc),
+                    # keep both: base RAR + the objective-specific single score
+                    "rar": float(rar_pack["rar"]),
+                    "expected_irr": float(rar_pack["expected_irr"]),
+                    "pd_12m": float(rar_pack["pd_12m"]),
+                    "single_score": float(
+                        _single_score(
+                            c,
+                            objective=obj,
+                            target_roi=target_roi,
+                            risk_penalty=risk_penalty,
+                            loss_penalty=loss_penalty,
+                        )
+                    ),
                     "single_metrics": c["res"]["metrics"],
                 }
             )
@@ -420,38 +453,37 @@ def build_portfolio(
             "debug": {
                 "k_eff": int(k_eff),
                 "n_sims_used_per_asset": int(n_s),
-                "weight_method": weight_method,
+                "weight_method": str(weight_method),
                 "weights_raw": np.asarray(w_opt, dtype=float),
                 "weights_final": np.asarray(w_final, dtype=float),
             },
         }
 
-    # 2) Choose objective (auto) or build directly
-    if objective != "auto":
-        if objective not in set(candidate_objectives) | {"expected_roi", "expected_log", "prob_target", "prob_10x"}:
-            raise ValueError("Unknown objective. Use 'auto' or one of: expected_roi, expected_log, prob_target, prob_10x.")
-        out = build_under_objective(objective)
-        out["debug"]["objective_search"] = None
-        return out
+    if objective == "auto":
+        tried = []
+        best: Optional[Dict[str, Any]] = None
+        for obj in candidate_objectives:
+            out_obj = build_under_objective(obj)
+            tried.append(
+                {
+                    "objective": obj,
+                    "portfolio_score": out_obj["portfolio_score"],
+                    "rar": out_obj["portfolio_metrics"]["rar"],
+                    "expected_irr": out_obj["portfolio_metrics"]["expected_irr"],
+                    "pd_12m": out_obj["portfolio_metrics"]["pd_12m"],
+                    "expected_roi": out_obj["portfolio_metrics"]["expected_roi"],
+                }
+            )
+            if best is None or out_obj["portfolio_score"] > best["portfolio_score"]:
+                best = out_obj
 
-    # Auto: try all candidate objectives and take the one with best portfolio_score
-    tried = []
-    best = None
-    for obj in candidate_objectives:
-        out_obj = build_under_objective(obj)
-        tried.append(
-            {
-                "objective": obj,
-                "portfolio_score": out_obj["portfolio_score"],
-                "expected_roi": out_obj["portfolio_metrics"]["expected_roi"],
-                "prob_loss": out_obj["portfolio_metrics"]["prob_roi_lt_1"],
-                "prob_10x": out_obj["portfolio_metrics"]["prob_10x"],
-            }
-        )
-        if best is None or out_obj["portfolio_score"] > best["portfolio_score"]:
-            best = out_obj
+        assert best is not None
+        best["debug"]["objective_search"] = tried
+        return best
 
-    assert best is not None
-    best["debug"]["objective_search"] = tried
-    best["objective_used"] = best["objective_used"]
-    return best
+    if objective not in set(candidate_objectives):
+        raise ValueError(f"Unknown objective '{objective}'. Use 'auto' or one of: {candidate_objectives}.")
+
+    out = build_under_objective(objective)
+    out["debug"]["objective_search"] = None
+    return out
