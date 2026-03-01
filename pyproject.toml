@@ -3,16 +3,19 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vs-sim"
+name = "venture-nerve"
 version = "0.1.0"
-description = "Hackathon VC / startup Monte Carlo simulator + portfolio recommender (ROI-first)."
+description = "Quantitative venture capital simulator for startup fragility analysis and portfolio construction using Monte Carlo modelling."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Your Team" }]
+
+authors = [
+    { name = "Shrivar Singh, Iakov Bondyaev, Shen Jie Yaw" }
+]
+
 dependencies = [
-  "numpy>=1.24",
-  "plotly>=5.18",
+    "numpy>=1.24",
 ]
 
 [tool.setuptools]
