@@ -183,3 +183,9 @@ NumPy
 # Authors
 
 Shrivar Singh, Iakov Bondyaev and Shen Jie Yaw
+
+---
+
+# License
+
+MIT License
