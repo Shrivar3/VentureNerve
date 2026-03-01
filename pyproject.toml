@@ -10,6 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 
+[project.urls]
+Homepage = "https://venture-nerve-match.base44.app/Landing"
+Repository = "https://github.com/Shrivar3/VentureNerve"
+
 authors = [
     { name = "Shrivar Singh, Iakov Bondyaev, Shen Jie Yaw" }
 ]
