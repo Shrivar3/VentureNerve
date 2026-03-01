@@ -1,191 +1,185 @@
-# VC Portfolio Simulator
+# VentureNerve — Venture Risk Metrics & Portfolio Simulation
 
-Link to website: https://venture-nerve-match.base44.app/
+VentureNerve is a platform that helps analyse startup risk and construct venture portfolios using quantitative simulation.
 
-A Monte Carlo–based venture capital portfolio optimisation engine.
+Live App:
 
-This project simulates startup outcomes under parameter uncertainty, evaluates expected returns and risk, and builds an optimised portfolio based on a chosen investor objective.
-
-It is designed for investor tooling prototypes and decision-support systems where transparency, flexibility, and scenario analysis are critical.
+https://venture-nerve-match.base44.app/Landing
 
 ---
 
-## What This Does
+# Demo Video
 
-This engine:
+See demo in:
 
-1. Simulates startup valuation paths using stochastic growth, failure risk, dilution, and exit uncertainty.
-2. Generates ROI distributions for each startup.
-3. Scores startups under multiple investor objectives.
-4. Selects the top-k startups subject to budget constraints.
-5. Optimises portfolio weights via stochastic search.
-6. Outputs portfolio metrics and allocation decisions.
+demo/VentureNerve-Demo.mp4
 
 ---
 
-## Core Model
+# Overview
 
-Each startup is simulated using:
+VentureNerve consists of:
 
-- Annual growth rate (μ)
-- Volatility (σ)
-- Annual failure probability
-- Dilution assumptions
-- Exit valuation tail (lognormal multiplier)
-- Optional macro shock correlation
+Frontend Application and Python Quantitative Simulation Engine
 
-The model produces:
+The frontend provides an interactive demonstration interface.
 
-- ROI distribution
-- IRR distribution
-- Expected payout
-- Probability of total loss
-- Probability of 3x, 10x outcomes
-- Survival curve
-- Percentile breakdown
+The Python backend contains the quantitative models used to simulate startup outcomes and investor portfolio performance.
+
+The frontend currently displays the platform interface, while the backend contains the modelling framework that supports the concepts shown.
 
 ---
 
-## Portfolio Optimisation
+# Core Idea
 
-Supported investor objectives:
+Startup outcomes are uncertain.
 
-- `"expected_roi"`
-- `"expected_log"`
-- `"prob_target"`
-- `"prob_10x"`
-- `"auto"` (tries all and selects the best)
+Instead of predicting a single outcome, VentureNerve simulates thousands of possible futures.
 
-Portfolio constraints:
+This allows analysis of:
 
-- Budget limit
-- Minimum ticket size
-- Top-k selection
-- Weight optimisation via Dirichlet random search
+• failure risk  
+• runway risk  
+• return distributions  
+• portfolio performance  
 
 ---
 
-## Example Usage
+# Repository Structure
 
-```python
-startups = [
-    StartupSpec("SaaS_Stable", dict(
-        mu_annual_mean=0.45,
-        mu_annual_sd=0.20,
-        p_fail_annual_mean=0.15,
-        p_fail_annual_strength=35,
-        sigma_annual_mean=0.70,
-        sigma_annual_sd=0.20,
-        dilution_mean=0.30,
-        dilution_sd=0.10,
-        exit_sigma_mean=0.60,
-        exit_sigma_sd=0.15,
-    )),
-    StartupSpec("DeepTech_LongShot", dict(
-        mu_annual_mean=0.90,
-        mu_annual_sd=0.40,
-        p_fail_annual_mean=0.35,
-        p_fail_annual_strength=18,
-        sigma_annual_mean=1.10,
-        sigma_annual_sd=0.35,
-        dilution_mean=0.55,
-        dilution_sd=0.20,
-        exit_sigma_mean=1.10,
-        exit_sigma_sd=0.30,
-    )),
-]
+```
+VentureNerve/
 
-portfolio = build_portfolio(
-    startups,
-    objective="auto",
-    budget=500_000,
-    k=2,
-    min_ticket=100_000,
-)
+frontend/
 
-print(portfolio["selected"])
+src/vs_sim/
+
+    startup_mc.py
+
+    vc_simulator.py
+
+    portfolio.py
+
+    portfolio_builder.py
+
+    investor_metrics.py
+
+demo/
+
+pyproject.toml
+
+README.md
 ```
 
 ---
 
-## Output Structure
+# Backend Simulation Components
 
-The portfolio builder returns:
+Startup Simulation
 
-```python
-{
-    "objective_used": ...,
-    "portfolio_score": ...,
-    "selected": [
-        {
-            "name": ...,
-            "weight": ...,
-            "ticket": ...,
-            "single_score": ...,
-            "single_metrics": ...
-        }
-    ],
-    "portfolio_metrics": {
-        "expected_roi": ...,
-        "median_roi": ...,
-        "prob_roi_lt_1": ...,
-        "prob_10x": ...
-    },
-    "portfolio_samples": {"roi": ...},
-    "debug": {...}
-}
+File:
+
+src/vs_sim/startup_mc.py
+
+Simulates:
+
+• cash balance  
+• burn  
+• runway  
+• distress probability  
+
+---
+
+Venture Return Simulation
+
+File:
+
+src/vs_sim/vc_simulator.py
+
+Simulates:
+
+• valuation evolution  
+• exit outcomes  
+• ROI  
+• IRR  
+
+---
+
+Portfolio Simulation
+
+Files:
+
+src/vs_sim/portfolio.py
+
+src/vs_sim/portfolio_builder.py
+
+Simulates:
+
+• portfolio returns  
+• different portfolio allocations  
+
+---
+
+Investor Metrics
+
+File:
+
+src/vs_sim/investor_metrics.py
+
+Computes:
+
+• risk-adjusted return metrics  
+
+---
+
+# Live Application
+
+Frontend Demo:
+
+https://venture-nerve-match.base44.app/Landing
+
+This demonstrates the VentureNerve platform interface.
+
+---
+
+# Installation
+
+Install backend:
+
+```
+pip install -e .
+```
+
+Example:
+
+```
+from vs_sim.vc_simulator import run_vc_return_simulator_uncertain
 ```
 
 ---
 
-## Designed For
+# Demo
 
-- VC fund modelling
-- Angel investment decision support
-- Startup scenario analysis
-- Portfolio theory experimentation
-- Risk-adjusted return optimisation
+Demo video included in:
+
+demo/VentureNerve-Demo.mp4
 
 ---
 
-## Tuning Levers
+# Tech Stack
 
-You can control:
+Frontend
 
-- `risk_penalty`
-- `loss_penalty`
-- `target_roi`
-- `weight_dirichlet_alpha`
-- `weight_dirichlet_draws`
-- `macro_shock_sd_annual`
-- Simulation size (`n_sims`)
+React  
+Base44  
 
-Lower alpha (<1) → concentrated portfolios  
-Higher alpha (>1) → more diversified portfolios  
+Backend
+
+Python  
+NumPy
 
 ---
 
-## Methodology Notes
+# Authors
 
-- Monthly valuation evolution with geometric growth
-- Failure as Bernoulli monthly hazard derived from annual probability
-- Exit modelled via lognormal multiplier
-- Portfolio ROI = weighted linear combination of startup ROI samples
-- Optimisation performed via stochastic weight search
-
-This is a simulation framework, not financial advice.
-
----
-
-## Roadmap
-
-Potential extensions:
-
-- Correlated startup returns
-- Sector factor modelling
-- Bayesian prior calibration from real data
-- Live API integration
-
----
-
-Built for quantitative decision-making under uncertainty.
+Shrivar Singh, Iakov Bondyaev and Shen Jie Yaw
