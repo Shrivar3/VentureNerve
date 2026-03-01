@@ -50,19 +50,21 @@ This allows analysis of:
 ```
 VentureNerve/
 
-frontend/
+app/ # Frontend app
+    src/ # Frontend source code
 
-src/vs_sim/
+src/
+    vs_sim/ # Python simulation engine
 
-    startup_mc.py
+        startup_mc.py
 
-    vc_simulator.py
+        vc_simulator.py
 
-    portfolio.py
+        portfolio.py
 
-    portfolio_builder.py
+        portfolio_builder.py
 
-    investor_metrics.py
+        investor_metrics.py
 
 demo/
 
